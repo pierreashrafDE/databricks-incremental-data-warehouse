@@ -1,0 +1,596 @@
+CREATE OR REPLACE PROCEDURE `warehouse-project`.bronze.load_bronze()
+LANGUAGE SQL
+SQL SECURITY INVOKER
+AS
+BEGIN
+
+    SELECT '========================================' AS message;
+    SELECT 'Starting Bronze Load...' AS message;
+    SELECT '========================================' AS message;
+
+
+    -- ============================================================
+    -- 1. CRM CUSTOMERS
+    -- Staging: bronze_staging.crm_cust_info
+    -- Bronze : bronze.crm_customers
+    -- Key    : cst_id
+    -- ============================================================
+
+    IF EXISTS (
+        SELECT 1
+        FROM `warehouse-project`.information_schema.tables
+        WHERE table_schema = 'bronze_staging'
+          AND table_name = 'crm_cust_info'
+    ) THEN
+
+        SELECT 'Processing CRM Customers...' AS message;
+
+        -- First ingestion: Bronze table does not exist
+        IF NOT EXISTS (
+            SELECT 1
+            FROM `warehouse-project`.information_schema.tables
+            WHERE table_schema = 'bronze'
+              AND table_name = 'crm_customers'
+        ) THEN
+
+            SELECT 'Bronze table does not exist. Creating CRM Customers...' AS message;
+
+            CREATE TABLE `warehouse-project`.bronze.crm_customers (
+                cst_id BIGINT,
+                cst_key STRING,
+                cst_firstname STRING,
+                cst_lastname STRING,
+                cst_marital_status STRING,
+                cst_gndr STRING,
+                cst_create_date DATE
+            )
+            USING DELTA;
+
+            INSERT INTO `warehouse-project`.bronze.crm_customers
+            SELECT
+                cst_id,
+                cst_key,
+                cst_firstname,
+                cst_lastname,
+                cst_marital_status,
+                cst_gndr,
+                cst_create_date
+            FROM `warehouse-project`.bronze_staging.crm_cust_info;
+
+        ELSE
+
+            SELECT 'Bronze table exists. Comparing CRM Customers...' AS message;
+
+            MERGE INTO `warehouse-project`.bronze.crm_customers AS target
+            USING `warehouse-project`.bronze_staging.crm_cust_info AS source
+
+            ON target.cst_id = source.cst_id
+
+            WHEN MATCHED
+                AND NOT (
+                    target.cst_key <=> source.cst_key
+                    AND target.cst_firstname <=> source.cst_firstname
+                    AND target.cst_lastname <=> source.cst_lastname
+                    AND target.cst_marital_status <=> source.cst_marital_status
+                    AND target.cst_gndr <=> source.cst_gndr
+                    AND target.cst_create_date <=> source.cst_create_date
+                )
+            THEN UPDATE SET
+                target.cst_key = source.cst_key,
+                target.cst_firstname = source.cst_firstname,
+                target.cst_lastname = source.cst_lastname,
+                target.cst_marital_status = source.cst_marital_status,
+                target.cst_gndr = source.cst_gndr,
+                target.cst_create_date = source.cst_create_date
+
+            WHEN NOT MATCHED
+            THEN INSERT (
+                cst_id,
+                cst_key,
+                cst_firstname,
+                cst_lastname,
+                cst_marital_status,
+                cst_gndr,
+                cst_create_date
+            )
+            VALUES (
+                source.cst_id,
+                source.cst_key,
+                source.cst_firstname,
+                source.cst_lastname,
+                source.cst_marital_status,
+                source.cst_gndr,
+                source.cst_create_date
+            );
+
+        END IF;
+
+        DROP TABLE `warehouse-project`.bronze_staging.crm_cust_info;
+
+        SELECT 'CRM Customers completed.' AS message;
+
+    ELSE
+
+        SELECT 'CRM Customers not included in this batch. Skipping.' AS message;
+
+    END IF;
+
+
+    -- ============================================================
+    -- 2. CRM PRODUCTS
+    -- Staging: bronze_staging.crm_prd_info
+    -- Bronze : bronze.crm_products
+    -- Key    : prd_id
+    -- ============================================================
+
+    IF EXISTS (
+        SELECT 1
+        FROM `warehouse-project`.information_schema.tables
+        WHERE table_schema = 'bronze_staging'
+          AND table_name = 'crm_prd_info'
+    ) THEN
+
+        SELECT 'Processing CRM Products...' AS message;
+
+        IF NOT EXISTS (
+            SELECT 1
+            FROM `warehouse-project`.information_schema.tables
+            WHERE table_schema = 'bronze'
+              AND table_name = 'crm_products'
+        ) THEN
+
+            SELECT 'Bronze table does not exist. Creating CRM Products...' AS message;
+
+            CREATE TABLE `warehouse-project`.bronze.crm_products (
+                prd_id BIGINT,
+                prd_key STRING,
+                prd_nm STRING,
+                prd_cost BIGINT,
+                prd_line STRING,
+                prd_start_dt DATE,
+                prd_end_dt DATE
+            )
+            USING DELTA;
+
+            INSERT INTO `warehouse-project`.bronze.crm_products
+            SELECT
+                prd_id,
+                prd_key,
+                prd_nm,
+                prd_cost,
+                prd_line,
+                prd_start_dt,
+                prd_end_dt
+            FROM `warehouse-project`.bronze_staging.crm_prd_info;
+
+        ELSE
+
+            SELECT 'Bronze table exists. Comparing CRM Products...' AS message;
+
+            MERGE INTO `warehouse-project`.bronze.crm_products AS target
+            USING `warehouse-project`.bronze_staging.crm_prd_info AS source
+
+            ON target.prd_id = source.prd_id
+
+            WHEN MATCHED
+                AND NOT (
+                    target.prd_key <=> source.prd_key
+                    AND target.prd_nm <=> source.prd_nm
+                    AND target.prd_cost <=> source.prd_cost
+                    AND target.prd_line <=> source.prd_line
+                    AND target.prd_start_dt <=> source.prd_start_dt
+                    AND target.prd_end_dt <=> source.prd_end_dt
+                )
+            THEN UPDATE SET
+                target.prd_key = source.prd_key,
+                target.prd_nm = source.prd_nm,
+                target.prd_cost = source.prd_cost,
+                target.prd_line = source.prd_line,
+                target.prd_start_dt = source.prd_start_dt,
+                target.prd_end_dt = source.prd_end_dt
+
+            WHEN NOT MATCHED
+            THEN INSERT (
+                prd_id,
+                prd_key,
+                prd_nm,
+                prd_cost,
+                prd_line,
+                prd_start_dt,
+                prd_end_dt
+            )
+            VALUES (
+                source.prd_id,
+                source.prd_key,
+                source.prd_nm,
+                source.prd_cost,
+                source.prd_line,
+                source.prd_start_dt,
+                source.prd_end_dt
+            );
+
+        END IF;
+
+        DROP TABLE `warehouse-project`.bronze_staging.crm_prd_info;
+
+        SELECT 'CRM Products completed.' AS message;
+
+    ELSE
+
+        SELECT 'CRM Products not included in this batch. Skipping.' AS message;
+
+    END IF;
+
+
+    -- ============================================================
+    -- 3. CRM SALES
+    -- Staging: bronze_staging.crm_sales_details
+    -- Bronze : bronze.crm_sales
+    -- Key    : sls_ord_num + sls_prd_key
+    -- ============================================================
+
+    IF EXISTS (
+        SELECT 1
+        FROM `warehouse-project`.information_schema.tables
+        WHERE table_schema = 'bronze_staging'
+          AND table_name = 'crm_sales_details'
+    ) THEN
+
+        SELECT 'Processing CRM Sales...' AS message;
+
+        IF NOT EXISTS (
+            SELECT 1
+            FROM `warehouse-project`.information_schema.tables
+            WHERE table_schema = 'bronze'
+              AND table_name = 'crm_sales'
+        ) THEN
+
+            SELECT 'Bronze table does not exist. Creating CRM Sales...' AS message;
+
+            CREATE TABLE `warehouse-project`.bronze.crm_sales (
+                sls_ord_num STRING,
+                sls_prd_key STRING,
+                sls_cust_id BIGINT,
+                sls_order_dt BIGINT,
+                sls_ship_dt BIGINT,
+                sls_due_dt BIGINT,
+                sls_sales BIGINT,
+                sls_quantity BIGINT,
+                sls_price BIGINT
+            )
+            USING DELTA;
+
+            INSERT INTO `warehouse-project`.bronze.crm_sales
+            SELECT
+                sls_ord_num,
+                sls_prd_key,
+                sls_cust_id,
+                sls_order_dt,
+                sls_ship_dt,
+                sls_due_dt,
+                sls_sales,
+                sls_quantity,
+                sls_price
+            FROM `warehouse-project`.bronze_staging.crm_sales_details;
+
+        ELSE
+
+            SELECT 'Bronze table exists. Comparing CRM Sales...' AS message;
+
+            MERGE INTO `warehouse-project`.bronze.crm_sales AS target
+            USING `warehouse-project`.bronze_staging.crm_sales_details AS source
+
+            ON target.sls_ord_num = source.sls_ord_num
+            AND target.sls_prd_key = source.sls_prd_key
+
+            WHEN MATCHED
+                AND NOT (
+                    target.sls_cust_id <=> source.sls_cust_id
+                    AND target.sls_order_dt <=> source.sls_order_dt
+                    AND target.sls_ship_dt <=> source.sls_ship_dt
+                    AND target.sls_due_dt <=> source.sls_due_dt
+                    AND target.sls_sales <=> source.sls_sales
+                    AND target.sls_quantity <=> source.sls_quantity
+                    AND target.sls_price <=> source.sls_price
+                )
+            THEN UPDATE SET
+                target.sls_cust_id = source.sls_cust_id,
+                target.sls_order_dt = source.sls_order_dt,
+                target.sls_ship_dt = source.sls_ship_dt,
+                target.sls_due_dt = source.sls_due_dt,
+                target.sls_sales = source.sls_sales,
+                target.sls_quantity = source.sls_quantity,
+                target.sls_price = source.sls_price
+
+            WHEN NOT MATCHED
+            THEN INSERT (
+                sls_ord_num,
+                sls_prd_key,
+                sls_cust_id,
+                sls_order_dt,
+                sls_ship_dt,
+                sls_due_dt,
+                sls_sales,
+                sls_quantity,
+                sls_price
+            )
+            VALUES (
+                source.sls_ord_num,
+                source.sls_prd_key,
+                source.sls_cust_id,
+                source.sls_order_dt,
+                source.sls_ship_dt,
+                source.sls_due_dt,
+                source.sls_sales,
+                source.sls_quantity,
+                source.sls_price
+            );
+
+        END IF;
+
+        DROP TABLE `warehouse-project`.bronze_staging.crm_sales_details;
+
+        SELECT 'CRM Sales completed.' AS message;
+
+    ELSE
+
+        SELECT 'CRM Sales not included in this batch. Skipping.' AS message;
+
+    END IF;
+
+
+    -- ============================================================
+    -- 4. ERP CUSTOMER
+    -- Staging: bronze_staging.erp_cust_az12
+    -- Bronze : bronze.erp_cust_az12
+    -- Key    : CID
+    -- ============================================================
+
+    IF EXISTS (
+        SELECT 1
+        FROM `warehouse-project`.information_schema.tables
+        WHERE table_schema = 'bronze_staging'
+          AND table_name = 'erp_cust_az12'
+    ) THEN
+
+        SELECT 'Processing ERP Customers...' AS message;
+
+        IF NOT EXISTS (
+            SELECT 1
+            FROM `warehouse-project`.information_schema.tables
+            WHERE table_schema = 'bronze'
+              AND table_name = 'erp_cust_az12'
+        ) THEN
+
+            SELECT 'Bronze table does not exist. Creating ERP Customers...' AS message;
+
+            CREATE TABLE `warehouse-project`.bronze.erp_cust_az12 (
+                CID STRING,
+                BDATE DATE,
+                GEN STRING
+            )
+            USING DELTA;
+
+            INSERT INTO `warehouse-project`.bronze.erp_cust_az12
+            SELECT
+                CID,
+                BDATE,
+                GEN
+            FROM `warehouse-project`.bronze_staging.erp_cust_az12;
+
+        ELSE
+
+            SELECT 'Bronze table exists. Comparing ERP Customers...' AS message;
+
+            MERGE INTO `warehouse-project`.bronze.erp_cust_az12 AS target
+            USING `warehouse-project`.bronze_staging.erp_cust_az12 AS source
+
+            ON target.CID = source.CID
+
+            WHEN MATCHED
+                AND NOT (
+                    target.BDATE <=> source.BDATE
+                    AND target.GEN <=> source.GEN
+                )
+            THEN UPDATE SET
+                target.BDATE = source.BDATE,
+                target.GEN = source.GEN
+
+            WHEN NOT MATCHED
+            THEN INSERT (
+                CID,
+                BDATE,
+                GEN
+            )
+            VALUES (
+                source.CID,
+                source.BDATE,
+                source.GEN
+            );
+
+        END IF;
+
+        DROP TABLE `warehouse-project`.bronze_staging.erp_cust_az12;
+
+        SELECT 'ERP Customers completed.' AS message;
+
+    ELSE
+
+        SELECT 'ERP Customers not included in this batch. Skipping.' AS message;
+
+    END IF;
+
+
+    -- ============================================================
+    -- 5. ERP LOCATION
+    -- Staging: bronze_staging.erp_loc_a101
+    -- Bronze : bronze.erp_location
+    -- Key    : CID
+    -- ============================================================
+
+    IF EXISTS (
+        SELECT 1
+        FROM `warehouse-project`.information_schema.tables
+        WHERE table_schema = 'bronze_staging'
+          AND table_name = 'erp_loc_a101'
+    ) THEN
+
+        SELECT 'Processing ERP Locations...' AS message;
+
+        IF NOT EXISTS (
+            SELECT 1
+            FROM `warehouse-project`.information_schema.tables
+            WHERE table_schema = 'bronze'
+              AND table_name = 'erp_location'
+        ) THEN
+
+            SELECT 'Bronze table does not exist. Creating ERP Locations...' AS message;
+
+            CREATE TABLE `warehouse-project`.bronze.erp_location (
+                CID STRING,
+                CNTRY STRING
+            )
+            USING DELTA;
+
+            INSERT INTO `warehouse-project`.bronze.erp_location
+            SELECT
+                CID,
+                CNTRY
+            FROM `warehouse-project`.bronze_staging.erp_loc_a101;
+
+        ELSE
+
+            SELECT 'Bronze table exists. Comparing ERP Locations...' AS message;
+
+            MERGE INTO `warehouse-project`.bronze.erp_location AS target
+            USING `warehouse-project`.bronze_staging.erp_loc_a101 AS source
+
+            ON target.CID = source.CID
+
+            WHEN MATCHED
+                AND NOT (
+                    target.CNTRY <=> source.CNTRY
+                )
+            THEN UPDATE SET
+                target.CNTRY = source.CNTRY
+
+            WHEN NOT MATCHED
+            THEN INSERT (
+                CID,
+                CNTRY
+            )
+            VALUES (
+                source.CID,
+                source.CNTRY
+            );
+
+        END IF;
+
+        DROP TABLE `warehouse-project`.bronze_staging.erp_loc_a101;
+
+        SELECT 'ERP Locations completed.' AS message;
+
+    ELSE
+
+        SELECT 'ERP Locations not included in this batch. Skipping.' AS message;
+
+    END IF;
+
+
+    -- ============================================================
+    -- 6. ERP PRODUCT CATEGORY
+    -- Staging: bronze_staging.erp_px_cat_g1v2
+    -- Bronze : bronze.erp_prd_cat
+    -- Key    : ID
+    -- ============================================================
+
+    IF EXISTS (
+        SELECT 1
+        FROM `warehouse-project`.information_schema.tables
+        WHERE table_schema = 'bronze_staging'
+          AND table_name = 'erp_px_cat_g1v2'
+    ) THEN
+
+        SELECT 'Processing ERP Product Categories...' AS message;
+
+        IF NOT EXISTS (
+            SELECT 1
+            FROM `warehouse-project`.information_schema.tables
+            WHERE table_schema = 'bronze'
+              AND table_name = 'erp_prd_cat'
+        ) THEN
+
+            SELECT 'Bronze table does not exist. Creating ERP Product Categories...' AS message;
+
+            CREATE TABLE `warehouse-project`.bronze.erp_prd_cat (
+                ID STRING,
+                CAT STRING,
+                SUBCAT STRING,
+                MAINTENANCE STRING
+            )
+            USING DELTA;
+
+            INSERT INTO `warehouse-project`.bronze.erp_prd_cat
+            SELECT
+                ID,
+                CAT,
+                SUBCAT,
+                MAINTENANCE
+            FROM `warehouse-project`.bronze_staging.erp_px_cat_g1v2;
+
+        ELSE
+
+            SELECT 'Bronze table exists. Comparing ERP Product Categories...' AS message;
+
+            MERGE INTO `warehouse-project`.bronze.erp_prd_cat AS target
+            USING `warehouse-project`.bronze_staging.erp_px_cat_g1v2 AS source
+
+            ON target.ID = source.ID
+
+            WHEN MATCHED
+                AND NOT (
+                    target.CAT <=> source.CAT
+                    AND target.SUBCAT <=> source.SUBCAT
+                    AND target.MAINTENANCE <=> source.MAINTENANCE
+                )
+            THEN UPDATE SET
+                target.CAT = source.CAT,
+                target.SUBCAT = source.SUBCAT,
+                target.MAINTENANCE = source.MAINTENANCE
+
+            WHEN NOT MATCHED
+            THEN INSERT (
+                ID,
+                CAT,
+                SUBCAT,
+                MAINTENANCE
+            )
+            VALUES (
+                source.ID,
+                source.CAT,
+                source.SUBCAT,
+                source.MAINTENANCE
+            );
+
+        END IF;
+
+        DROP TABLE `warehouse-project`.bronze_staging.erp_px_cat_g1v2;
+
+        SELECT 'ERP Product Categories completed.' AS message;
+
+    ELSE
+
+        SELECT 'ERP Product Categories not included in this batch. Skipping.' AS message;
+
+    END IF;
+
+
+    -- ============================================================
+    -- COMPLETE
+    -- ============================================================
+
+    SELECT '========================================' AS message;
+    SELECT 'Bronze Load Completed Successfully!' AS message;
+    SELECT '========================================' AS message;
+
+END;

@@ -1,0 +1,592 @@
+CREATE OR REPLACE PROCEDURE `warehouse-project`.silver.load_silver()
+LANGUAGE SQL
+SQL SECURITY INVOKER
+MODIFIES SQL DATA
+AS
+BEGIN
+
+    -- =========================================================
+    -- STEP 1: CREATE / REFRESH SILVER STAGING TABLES
+    -- =========================================================
+
+    SELECT '========================================' AS message;
+    SELECT 'STARTING SILVER LAYER' AS message;
+    SELECT '========================================' AS message;
+
+
+    -- =========================================================
+    -- CRM CUSTOMERS
+    -- =========================================================
+
+    SELECT 'Transforming crm_customers...' AS message;
+
+    CREATE OR REPLACE TABLE `warehouse-project`.silver_staging.crm_customers AS
+    SELECT 
+        cst_id,
+        cst_key,
+        TRIM(cst_firstname) AS cst_firstname,
+        TRIM(cst_lastname) AS cst_lastname,
+
+        CASE UPPER(TRIM(cst_marital_status)) 
+            WHEN 'S' THEN 'Single'
+            WHEN 'M' THEN 'Married'
+            ELSE 'N/A'
+        END AS cst_marital_status,
+
+        CASE UPPER(TRIM(cst_gndr)) 
+            WHEN 'M' THEN 'Male'
+            WHEN 'F' THEN 'Female'
+            ELSE 'N/A'
+        END AS cst_gndr,
+
+        cst_create_date
+
+    FROM (
+        SELECT 
+            *,
+            ROW_NUMBER() OVER (
+                PARTITION BY cst_id 
+                ORDER BY cst_create_date DESC
+            ) AS FLAG
+
+        FROM `warehouse-project`.bronze.crm_customers
+
+        WHERE cst_id IS NOT NULL
+    ) T
+
+    WHERE T.FLAG = 1;
+
+
+    -- =========================================================
+    -- CRM PRODUCTS
+    -- =========================================================
+
+    SELECT 'Transforming crm_products...' AS message;
+
+    CREATE OR REPLACE TABLE `warehouse-project`.silver_staging.crm_products AS
+    SELECT 
+        prd_id,
+
+        REPLACE(
+            SUBSTRING(prd_key, 1, 5),
+            '-',
+            '_'
+        ) AS cat_id,
+
+        SUBSTRING(
+            prd_key,
+            7,
+            LENGTH(prd_key)
+        ) AS prd_key,
+
+        prd_nm,
+
+        COALESCE(prd_cost, 0) AS prd_cost,
+
+        CASE UPPER(TRIM(prd_line))
+            WHEN 'R' THEN 'Road'
+            WHEN 'S' THEN 'Other sales'
+            WHEN 'M' THEN 'Mountain'
+            WHEN 'T' THEN 'Touring'
+            ELSE 'N/A'
+        END AS prd_line,
+
+        prd_start_dt,
+
+        LEAD(prd_start_dt) OVER (
+            PARTITION BY prd_key
+            ORDER BY prd_start_dt
+        ) - 1 AS prd_end_dt
+
+    FROM (
+        SELECT 
+            *,
+            ROW_NUMBER() OVER (
+                PARTITION BY prd_id
+                ORDER BY prd_start_dt
+            ) AS FLAG_prd_id
+
+        FROM `warehouse-project`.bronze.crm_products
+    ) T
+
+    WHERE T.FLAG_prd_id = 1;
+
+
+    -- =========================================================
+    -- CRM SALES
+    -- =========================================================
+
+    SELECT 'Transforming crm_sales...' AS message;
+
+    CREATE OR REPLACE TABLE `warehouse-project`.silver_staging.crm_sales AS
+    SELECT 
+        sls_ord_num,
+        sls_prd_key,
+        sls_cust_id,
+
+        CASE 
+            WHEN LENGTH(CAST(sls_order_dt AS STRING)) != 8
+                 OR sls_order_dt = 0
+            THEN NULL
+
+            ELSE TO_DATE(
+                CAST(sls_order_dt AS STRING),
+                'yyyyMMdd'
+            )
+        END AS sls_order_dt,
+
+        CASE 
+            WHEN LENGTH(CAST(sls_ship_dt AS STRING)) != 8
+                 OR sls_ship_dt = 0
+            THEN NULL
+
+            ELSE TO_DATE(
+                CAST(sls_ship_dt AS STRING),
+                'yyyyMMdd'
+            )
+        END AS sls_ship_dt,
+
+        CASE 
+            WHEN LENGTH(CAST(sls_due_dt AS STRING)) != 8
+                 OR sls_due_dt = 0
+            THEN NULL
+
+            ELSE TO_DATE(
+                CAST(sls_due_dt AS STRING),
+                'yyyyMMdd'
+            )
+        END AS sls_due_dt,
+
+        CASE 
+            WHEN sls_sales <= 0
+                 OR sls_sales IS NULL
+                 OR sls_sales != sls_quantity * ABS(sls_price)
+
+            THEN sls_quantity * ABS(sls_price)
+
+            ELSE ABS(sls_sales)
+        END AS sls_sales,
+
+        sls_quantity,
+
+        CASE 
+            WHEN sls_price <= 0
+                 OR sls_price IS NULL
+
+            THEN sls_sales / NULLIF(sls_quantity, 0)
+
+            ELSE ABS(sls_price)
+        END AS sls_price
+
+    FROM `warehouse-project`.bronze.crm_sales;
+
+
+    -- =========================================================
+    -- ERP CUSTOMER
+    -- =========================================================
+
+    SELECT 'Transforming erp_cust_az12...' AS message;
+
+    CREATE OR REPLACE TABLE `warehouse-project`.silver_staging.erp_cust_az12 AS
+    SELECT 
+
+        CASE 
+            WHEN CID LIKE 'NAS%'
+            THEN SUBSTRING(CID, 4, LENGTH(CID))
+
+            ELSE CID
+        END AS CID,
+
+        CASE 
+            WHEN BDATE > CURRENT_DATE()
+            THEN NULL
+
+            ELSE BDATE
+        END AS BDATE,
+
+        CASE 
+            WHEN UPPER(TRIM(GEN)) IN ('M', 'MALE')
+            THEN 'Male'
+
+            WHEN UPPER(TRIM(GEN)) IN ('F', 'FEMALE')
+            THEN 'Female'
+
+            ELSE 'N/A'
+        END AS GEN
+
+    FROM `warehouse-project`.bronze.erp_cust_az12;
+
+
+    -- =========================================================
+    -- ERP LOCATION
+    -- =========================================================
+
+    SELECT 'Transforming erp_location...' AS message;
+
+    CREATE OR REPLACE TABLE `warehouse-project`.silver_staging.erp_location AS
+    SELECT 
+
+        REPLACE(CID, '-', '') AS CID,
+
+        CASE
+            WHEN TRIM(CNTRY) IN ('US', 'USA')
+            THEN 'United States'
+
+            WHEN TRIM(CNTRY) = 'DE'
+            THEN 'Germany'
+
+            WHEN TRIM(CNTRY) = ''
+                 OR TRIM(CNTRY) IS NULL
+            THEN 'N/A'
+
+            ELSE CNTRY
+        END AS CNTRY
+
+    FROM `warehouse-project`.bronze.erp_location;
+
+
+    -- =========================================================
+    -- ERP PRODUCT CATEGORY
+    -- =========================================================
+
+    SELECT 'Transforming erp_prd_cat...' AS message;
+
+    CREATE OR REPLACE TABLE `warehouse-project`.silver_staging.erp_prd_cat AS
+    SELECT *
+    FROM `warehouse-project`.bronze.erp_prd_cat;
+
+
+    -- =========================================================
+    -- STEP 2: CREATE SILVER TABLES IF THEY DO NOT EXIST
+    -- =========================================================
+
+    SELECT 'Checking / creating Silver tables...' AS message;
+
+    CREATE TABLE IF NOT EXISTS `warehouse-project`.silver.crm_customers
+    AS SELECT *
+    FROM `warehouse-project`.silver_staging.crm_customers;
+
+    CREATE TABLE IF NOT EXISTS `warehouse-project`.silver.crm_products
+    AS SELECT *
+    FROM `warehouse-project`.silver_staging.crm_products;
+
+    CREATE TABLE IF NOT EXISTS `warehouse-project`.silver.crm_sales
+    AS SELECT *
+    FROM `warehouse-project`.silver_staging.crm_sales;
+
+    CREATE TABLE IF NOT EXISTS `warehouse-project`.silver.erp_cust_az12
+    AS SELECT *
+    FROM `warehouse-project`.silver_staging.erp_cust_az12;
+
+    CREATE TABLE IF NOT EXISTS `warehouse-project`.silver.erp_location
+    AS SELECT *
+    FROM `warehouse-project`.silver_staging.erp_location;
+
+    CREATE TABLE IF NOT EXISTS `warehouse-project`.silver.erp_prd_cat
+    AS SELECT *
+    FROM `warehouse-project`.silver_staging.erp_prd_cat;
+
+
+    -- =========================================================
+    -- STEP 3: MERGE SILVER STAGING → SILVER
+    -- =========================================================
+
+
+    -- =========================================================
+    -- CRM CUSTOMERS
+    -- KEY: cst_id
+    -- =========================================================
+
+    SELECT 'Merging crm_customers...' AS message;
+
+    MERGE INTO `warehouse-project`.silver.crm_customers AS T
+    USING `warehouse-project`.silver_staging.crm_customers AS S
+
+    ON T.cst_id = S.cst_id
+
+    WHEN MATCHED
+         AND NOT (
+             T.cst_key <=> S.cst_key
+             AND T.cst_firstname <=> S.cst_firstname
+             AND T.cst_lastname <=> S.cst_lastname
+             AND T.cst_marital_status <=> S.cst_marital_status
+             AND T.cst_gndr <=> S.cst_gndr
+             AND T.cst_create_date <=> S.cst_create_date
+         )
+
+    THEN UPDATE SET
+        T.cst_key = S.cst_key,
+        T.cst_firstname = S.cst_firstname,
+        T.cst_lastname = S.cst_lastname,
+        T.cst_marital_status = S.cst_marital_status,
+        T.cst_gndr = S.cst_gndr,
+        T.cst_create_date = S.cst_create_date
+
+    WHEN NOT MATCHED
+    THEN INSERT (
+        cst_id,
+        cst_key,
+        cst_firstname,
+        cst_lastname,
+        cst_marital_status,
+        cst_gndr,
+        cst_create_date
+    )
+
+    VALUES (
+        S.cst_id,
+        S.cst_key,
+        S.cst_firstname,
+        S.cst_lastname,
+        S.cst_marital_status,
+        S.cst_gndr,
+        S.cst_create_date
+    );
+
+
+    -- =========================================================
+    -- CRM PRODUCTS
+    -- KEY: prd_id
+    -- =========================================================
+
+    SELECT 'Merging crm_products...' AS message;
+
+    MERGE INTO `warehouse-project`.silver.crm_products AS T
+    USING `warehouse-project`.silver_staging.crm_products AS S
+
+    ON T.prd_id = S.prd_id
+
+    WHEN MATCHED
+         AND NOT (
+             T.cat_id <=> S.cat_id
+             AND T.prd_key <=> S.prd_key
+             AND T.prd_nm <=> S.prd_nm
+             AND T.prd_cost <=> S.prd_cost
+             AND T.prd_line <=> S.prd_line
+             AND T.prd_start_dt <=> S.prd_start_dt
+             AND T.prd_end_dt <=> S.prd_end_dt
+         )
+
+    THEN UPDATE SET
+        T.cat_id = S.cat_id,
+        T.prd_key = S.prd_key,
+        T.prd_nm = S.prd_nm,
+        T.prd_cost = S.prd_cost,
+        T.prd_line = S.prd_line,
+        T.prd_start_dt = S.prd_start_dt,
+        T.prd_end_dt = S.prd_end_dt
+
+    WHEN NOT MATCHED
+    THEN INSERT (
+        prd_id,
+        cat_id,
+        prd_key,
+        prd_nm,
+        prd_cost,
+        prd_line,
+        prd_start_dt,
+        prd_end_dt
+    )
+
+    VALUES (
+        S.prd_id,
+        S.cat_id,
+        S.prd_key,
+        S.prd_nm,
+        S.prd_cost,
+        S.prd_line,
+        S.prd_start_dt,
+        S.prd_end_dt
+    );
+
+
+    -- =========================================================
+    -- CRM SALES
+    -- KEY: sls_ord_num + sls_prd_key
+    -- =========================================================
+
+    SELECT 'Merging crm_sales...' AS message;
+
+    MERGE INTO `warehouse-project`.silver.crm_sales AS T
+    USING `warehouse-project`.silver_staging.crm_sales AS S
+
+    ON T.sls_ord_num = S.sls_ord_num
+       AND T.sls_prd_key = S.sls_prd_key
+
+    WHEN MATCHED
+         AND NOT (
+             T.sls_cust_id <=> S.sls_cust_id
+             AND T.sls_order_dt <=> S.sls_order_dt
+             AND T.sls_ship_dt <=> S.sls_ship_dt
+             AND T.sls_due_dt <=> S.sls_due_dt
+             AND T.sls_sales <=> S.sls_sales
+             AND T.sls_quantity <=> S.sls_quantity
+             AND T.sls_price <=> S.sls_price
+         )
+
+    THEN UPDATE SET
+        T.sls_cust_id = S.sls_cust_id,
+        T.sls_order_dt = S.sls_order_dt,
+        T.sls_ship_dt = S.sls_ship_dt,
+        T.sls_due_dt = S.sls_due_dt,
+        T.sls_sales = S.sls_sales,
+        T.sls_quantity = S.sls_quantity,
+        T.sls_price = S.sls_price
+
+    WHEN NOT MATCHED
+    THEN INSERT (
+        sls_ord_num,
+        sls_prd_key,
+        sls_cust_id,
+        sls_order_dt,
+        sls_ship_dt,
+        sls_due_dt,
+        sls_sales,
+        sls_quantity,
+        sls_price
+    )
+
+    VALUES (
+        S.sls_ord_num,
+        S.sls_prd_key,
+        S.sls_cust_id,
+        S.sls_order_dt,
+        S.sls_ship_dt,
+        S.sls_due_dt,
+        S.sls_sales,
+        S.sls_quantity,
+        S.sls_price
+    );
+
+
+    -- =========================================================
+    -- ERP CUSTOMER
+    -- KEY: CID
+    -- =========================================================
+
+    SELECT 'Merging erp_cust_az12...' AS message;
+
+    MERGE INTO `warehouse-project`.silver.erp_cust_az12 AS T
+    USING `warehouse-project`.silver_staging.erp_cust_az12 AS S
+
+    ON T.CID = S.CID
+
+    WHEN MATCHED
+         AND NOT (
+             T.BDATE <=> S.BDATE
+             AND T.GEN <=> S.GEN
+         )
+
+    THEN UPDATE SET
+        T.BDATE = S.BDATE,
+        T.GEN = S.GEN
+
+    WHEN NOT MATCHED
+    THEN INSERT (
+        CID,
+        BDATE,
+        GEN
+    )
+
+    VALUES (
+        S.CID,
+        S.BDATE,
+        S.GEN
+    );
+
+
+    -- =========================================================
+    -- ERP LOCATION
+    -- KEY: CID
+    -- =========================================================
+
+    SELECT 'Merging erp_location...' AS message;
+
+    MERGE INTO `warehouse-project`.silver.erp_location AS T
+    USING `warehouse-project`.silver_staging.erp_location AS S
+
+    ON T.CID = S.CID
+
+    WHEN MATCHED
+         AND NOT (
+             T.CNTRY <=> S.CNTRY
+         )
+
+    THEN UPDATE SET
+        T.CNTRY = S.CNTRY
+
+    WHEN NOT MATCHED
+    THEN INSERT (
+        CID,
+        CNTRY
+    )
+
+    VALUES (
+        S.CID,
+        S.CNTRY
+    );
+
+
+    -- =========================================================
+    -- ERP PRODUCT CATEGORY
+    -- KEY: ID
+    -- =========================================================
+
+    SELECT 'Merging erp_prd_cat...' AS message;
+
+    MERGE INTO `warehouse-project`.silver.erp_prd_cat AS T
+    USING `warehouse-project`.silver_staging.erp_prd_cat AS S
+
+    ON T.ID = S.ID
+
+    WHEN MATCHED
+         AND NOT (
+             T.CAT <=> S.CAT
+             AND T.SUBCAT <=> S.SUBCAT
+             AND T.MAINTENANCE <=> S.MAINTENANCE
+         )
+
+    THEN UPDATE SET
+        T.CAT = S.CAT,
+        T.SUBCAT = S.SUBCAT,
+        T.MAINTENANCE = S.MAINTENANCE
+
+    WHEN NOT MATCHED
+    THEN INSERT (
+        ID,
+        CAT,
+        SUBCAT,
+        MAINTENANCE
+    )
+
+    VALUES (
+        S.ID,
+        S.CAT,
+        S.SUBCAT,
+        S.MAINTENANCE
+    );
+
+
+    -- =========================================================
+    -- STEP 4: DROP SILVER STAGING TABLES
+    -- =========================================================
+
+    SELECT 'Cleaning silver_staging...' AS message;
+
+    DROP TABLE IF EXISTS `warehouse-project`.silver_staging.crm_customers;
+    DROP TABLE IF EXISTS `warehouse-project`.silver_staging.crm_products;
+    DROP TABLE IF EXISTS `warehouse-project`.silver_staging.crm_sales;
+    DROP TABLE IF EXISTS `warehouse-project`.silver_staging.erp_cust_az12;
+    DROP TABLE IF EXISTS `warehouse-project`.silver_staging.erp_location;
+    DROP TABLE IF EXISTS `warehouse-project`.silver_staging.erp_prd_cat;
+
+
+    -- =========================================================
+    -- COMPLETE
+    -- =========================================================
+
+    SELECT '========================================' AS message;
+    SELECT 'SILVER LAYER COMPLETED SUCCESSFULLY' AS message;
+    SELECT '========================================' AS message;
+
+END;
